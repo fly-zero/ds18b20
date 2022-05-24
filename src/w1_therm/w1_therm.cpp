@@ -64,12 +64,21 @@ static void w1_therm_run(sqlite3 * handle, const char * path, const char * name)
 
 	s_running = true;
 
+	std::chrono::minutes const interval{ 5 };
+	std::chrono::steady_clock::time_point next_read_time;
+
 	while (s_running)
 	{
-		auto const therm = w1_slave_read(path);
-		auto const now = time(nullptr);
-		insert_record(handle, name, therm, now);
-		std::this_thread::sleep_for(std::chrono::minutes{ 5 });
+		auto const now = std::chrono::steady_clock::now();
+		if (next_read_time <= now)
+		{
+			next_read_time = now + interval;
+			auto const therm = w1_slave_read(path);
+			auto const now = time(nullptr);
+			insert_record(handle, name, therm, now);
+		}
+
+		std::this_thread::sleep_for(std::chrono::milliseconds{ 250 });
 	}
 
 	std::cerr << "w1_therm is stoped!" << std::endl;
