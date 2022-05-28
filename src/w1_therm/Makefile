@@ -23,4 +23,4 @@ ${target}: ${obj}
 	g++ $^ -o $@ ${libs}
 
 %.o: %.cpp
-	g++ -c -Wall -Werror -Wextra -std=c++11 ${cxxflag} ${defs} -o $@ $<
+	g++ -c -Wall -Werror -Wextra -std=c++20 ${cxxflag} ${defs} -o $@ $<

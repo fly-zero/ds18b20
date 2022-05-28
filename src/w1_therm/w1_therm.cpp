@@ -2,12 +2,17 @@
 
 #include <cassert>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 
 #include <chrono>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <thread>
+#include <optional>
+#include <string_view>
 
 #include <sqlite3.h>
 
@@ -28,11 +33,46 @@ static void init_signal_handle()
 	std::signal(SIGINT, handle);
 }
 
-static int w1_slave_read(const char * path)
+std::optional<int> w1_slave_read(const char * path)
 {
-	(void)path;
-	// TODO: read w1_slave
-	return 0;
+	std::optional<int> ret;
+	auto const destroyer = [](FILE * fp) { fclose(fp); };
+	std::unique_ptr<FILE, decltype(destroyer)> const fp{ fopen(path, "r"), destroyer };
+	if (!fp) return ret;
+
+	do
+	{
+		std::string_view line;
+		std::string_view const flag{ "t=" };
+		char buf[256], *endptr;
+		int len;
+
+		if (fscanf(fp.get(), "%[^\n]%n", buf, &len) != 1) break;
+
+		line = std::string_view{ buf, static_cast<size_t>(len) };
+		if (!line.ends_with("YES")) break;
+
+		fgetc(fp.get()); // skip '\n'
+
+		if (fscanf(fp.get(), "%[^\n]%n", buf, &len) != 1) break;
+
+		line = std::string_view{ buf, static_cast<size_t>(len) };
+		auto const pos = line.rfind(flag);
+		if (pos == std::string_view::npos) break;
+
+		auto const t = line.substr(pos + flag.size());
+		auto const n = strtol(t.data(), &endptr, 10);
+		auto const ok =
+			endptr == t.end() &&
+			std::numeric_limits<int>::min() <= n &&
+			n <= std::numeric_limits<int>::max();
+		if (!ok) break;
+		ret = static_cast<int>(n);
+		return ret;
+	} while (false);
+
+	std::cerr << "Cannot parse w1_slave" << std::endl;
+	return ret;
 }
 
 static void insert_record(sqlite3 * handle, const char * name, int therm, time_t now)
@@ -52,9 +92,7 @@ static void insert_record(sqlite3 * handle, const char * name, int therm, time_t
 	}
 	else
 	{
-#ifdef _DEBUG_
 		std::cerr << "new record: " << name << ',' << therm << ',' << now << std::endl;
-#endif
 	}
 }
 
@@ -74,8 +112,11 @@ static void w1_therm_run(sqlite3 * handle, const char * path, const char * name)
 		{
 			next_read_time = now + interval;
 			auto const therm = w1_slave_read(path);
-			auto const now = time(nullptr);
-			insert_record(handle, name, therm, now);
+			if likely(therm)
+			{
+				auto const utc_now = time(nullptr);
+				insert_record(handle, name, *therm, utc_now);
+			}
 		}
 
 		std::this_thread::sleep_for(std::chrono::milliseconds{ 250 });
