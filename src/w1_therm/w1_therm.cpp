@@ -1,3 +1,4 @@
+#include <syslog.h>
 #include <unistd.h>
 #include <wait.h>
 
@@ -82,7 +83,7 @@ inline std::optional<int> w1_slave_read(const char * path)
 		return ret;
 	} while (false);
 
-	std::cerr << "Cannot parse w1_slave" << std::endl;
+	syslog(LOG_USER | LOG_ERR, "Cannot parse w1_slave\n");
 	return ret;
 }
 
@@ -98,12 +99,14 @@ inline void insert_record(sqlite3 * handle, const char * name, int therm, time_t
 	auto const err = sqlite3_exec(handle, sql, nullptr, nullptr, &errmsg);
 	if unlikely(err != SQLITE_OK)
 	{
-		std::cerr << "Cannot insert record: " << errmsg << std::endl;
+		syslog(LOG_USER | LOG_ERR, "Cannot insert record: %s\n", errmsg);
 		sqlite3_free(errmsg);
 	}
 	else
 	{
+#ifdef _DEBUG_
 		std::cerr << "new record: " << name << ',' << therm << ',' << now << std::endl;
+#endif
 	}
 }
 
@@ -111,11 +114,11 @@ inline void w1_therm_run(sqlite3 * handle, const therm_config & config)
 {
 	if (config.daemonlize_ && daemon(1, 0))
 	{
-		std::cerr << "Cannot daemonlize" << std::endl;
+		syslog(LOG_USER | LOG_ERR, "Cannot daemonlize\n");
 		exit(EXIT_FAILURE);
 	}
 
-	std::cerr << "w1_therm is started!" << std::endl;
+	syslog(LOG_USER | LOG_INFO, "w1_therm is started!\n");
 
 	s_running = true;
 
@@ -139,7 +142,7 @@ inline void w1_therm_run(sqlite3 * handle, const therm_config & config)
 		std::this_thread::sleep_for(std::chrono::milliseconds{ 250 });
 	}
 
-	std::cerr << "w1_therm is stoped!" << std::endl;
+	syslog(LOG_USER | LOG_INFO, "w1_therm is stopped!\n");
 }
 
 inline sqlite3 * init_sqlite()
@@ -147,8 +150,8 @@ inline sqlite3 * init_sqlite()
 	sqlite3 * handle{ nullptr };
 	if (sqlite3_open("w1_therm.db", &handle) != SQLITE_OK)
 	{
+		syslog(LOG_USER | LOG_ERR, "Cannot initialize SQLite\n");
 		sqlite3_close(handle);
-		std::cerr << "Cannot initialize SQLite" << std::endl;
 		exit(EXIT_FAILURE);
 	}
 
@@ -164,19 +167,19 @@ inline sqlite3 * init_sqlite()
 	auto const err = sqlite3_exec(handle, sql, nullptr, nullptr, &errmsg);
 	if (err != SQLITE_OK)
 	{
-		std::cerr << "Cannot create SQLite table: " << errmsg << std::endl;
+		syslog(LOG_USER | LOG_ERR, "Cannot create SQLite table: %s\n", errmsg);
 		sqlite3_close(handle);
 		exit(EXIT_FAILURE);
 	}
 
-	std::cerr << "Database is opened!" << std::endl;
+	syslog(LOG_USER | LOG_INFO, "Database is opened!\n");
 	return handle;
 }
 
 inline void cleanup_sqlite(sqlite3 * handle)
 {
 	sqlite3_close(handle);
-	std::cerr << "Database is closed!" << std::endl;
+	syslog(LOG_USER | LOG_INFO, "Database is closed!\n");
 }
 
 inline therm_config parse_arguments(int const argc, char ** argv)
@@ -227,9 +230,25 @@ inline therm_config parse_arguments(int const argc, char ** argv)
 	return config;
 }
 
+inline void init_log(const char * arg0)
+{
+	std::string_view tmp{ arg0 };
+	auto const pos = tmp.rfind('/');
+	if (pos != std::string_view::npos)
+		tmp = tmp.substr(pos + 1);
+	openlog(tmp.data(), LOG_PERROR | LOG_PID | LOG_NDELAY, LOG_USER);
+}
+
+inline void deinit_log()
+{
+	closelog();
+}
+
 int main(int argc, char ** argv)
 {
 	auto const config = parse_arguments(argc, argv);
+
+	init_log(argv[0]);
 
 	init_signal_handle();
 
@@ -238,4 +257,6 @@ int main(int argc, char ** argv)
 	w1_therm_run(handle, config);
 
 	cleanup_sqlite(handle);
+
+	deinit_log();
 }
