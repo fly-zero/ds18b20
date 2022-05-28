@@ -46,12 +46,13 @@ inline void init_signal_handle()
 inline std::optional<int> w1_slave_read(const char * path)
 {
 	std::optional<int> ret;
-	auto const destroyer = [](FILE * fp) { fclose(fp); };
-	std::unique_ptr<FILE, decltype(destroyer)> const fp{ fopen(path, "r"), destroyer };
-	if (!fp) return ret;
 
 	do
 	{
+		auto const destroyer = [](FILE * fp) { fclose(fp); };
+		std::unique_ptr<FILE, decltype(destroyer)> const fp{ fopen(path, "r"), destroyer };
+		if (!fp) break;
+
 		std::string_view line;
 		std::string_view const flag{ "t=" };
 		char buf[256], *endptr;
@@ -184,7 +185,8 @@ inline therm_config parse_arguments(int const argc, char ** argv)
 
 	try
 	{
-		if (argc < 3) throw std::invalid_argument{ "too few argument" };
+		if (argc < 3)
+			throw std::invalid_argument{ "too few argument" };
 
 		constexpr auto * opts{ "p:n:d" };
 
@@ -205,9 +207,12 @@ inline therm_config parse_arguments(int const argc, char ** argv)
 				break;
 
 			default:
-				throw std::invalid_argument{"invalid argument"};
+				throw std::invalid_argument{ "invalid argument" };
 			}
 		}
+
+		if (!config.name_ || !config.name_)
+			throw std::invalid_argument{ "invalid argument" };
 	}
 	catch (std::invalid_argument const &)
 	{
