@@ -4,6 +4,8 @@ obj=w1_therm.o
 libs=-lsqlite3
 defs=
 cxxflag=
+LNK=g++
+CXX=g++
 
 .PHONY: all debug release clean
 
@@ -20,7 +22,7 @@ clean:
 	rm -f ${obj} ${target}
 
 ${target}: ${obj}
-	g++ $^ -o $@ ${libs}
+	${LNK} $^ -o $@ ${libs}
 
 %.o: %.cpp
-	g++ -c -Wall -Werror -Wextra -std=c++20 ${cxxflag} ${defs} -o $@ $<
+	${CXX} -c -Wall -Werror -Wextra -std=c++20 ${cxxflag} ${defs} -o $@ $<

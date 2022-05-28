@@ -1,9 +1,11 @@
 #include <unistd.h>
+#include <wait.h>
 
 #include <cassert>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 
 #include <chrono>
@@ -12,6 +14,7 @@
 #include <memory>
 #include <thread>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 
 #include <sqlite3.h>
@@ -24,16 +27,23 @@
 # define unlikely(x) (__builtin_expect(!!(x), 0))
 #endif
 
+struct therm_config
+{
+	const char * path_{ nullptr };
+	const char * name_{ nullptr };
+	bool         daemonlize_{ false };
+};
+
 static auto s_running = false;
 
-static void init_signal_handle()
+inline void init_signal_handle()
 {
 	auto const handle = [](int){ s_running = false; };
 	std::signal(SIGTERM, handle);
 	std::signal(SIGINT, handle);
 }
 
-std::optional<int> w1_slave_read(const char * path)
+inline std::optional<int> w1_slave_read(const char * path)
 {
 	std::optional<int> ret;
 	auto const destroyer = [](FILE * fp) { fclose(fp); };
@@ -75,7 +85,7 @@ std::optional<int> w1_slave_read(const char * path)
 	return ret;
 }
 
-static void insert_record(sqlite3 * handle, const char * name, int therm, time_t now)
+inline void insert_record(sqlite3 * handle, const char * name, int therm, time_t now)
 {
 	char sql[256];
 	auto const len = snprintf(sql, sizeof sql,
@@ -96,13 +106,19 @@ static void insert_record(sqlite3 * handle, const char * name, int therm, time_t
 	}
 }
 
-static void w1_therm_run(sqlite3 * handle, const char * path, const char * name)
+inline void w1_therm_run(sqlite3 * handle, const therm_config & config)
 {
+	if (config.daemonlize_ && daemon(1, 0))
+	{
+		std::cerr << "Cannot daemonlize" << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
 	std::cerr << "w1_therm is started!" << std::endl;
 
 	s_running = true;
 
-	std::chrono::minutes const interval{ 5 };
+	std::chrono::minutes constexpr interval{ 5 };
 	std::chrono::steady_clock::time_point next_read_time;
 
 	while (s_running)
@@ -111,11 +127,11 @@ static void w1_therm_run(sqlite3 * handle, const char * path, const char * name)
 		if (next_read_time <= now)
 		{
 			next_read_time = now + interval;
-			auto const therm = w1_slave_read(path);
+			auto const therm = w1_slave_read(config.path_);
 			if likely(therm)
 			{
 				auto const utc_now = time(nullptr);
-				insert_record(handle, name, *therm, utc_now);
+				insert_record(handle, config.name_, *therm, utc_now);
 			}
 		}
 
@@ -125,7 +141,7 @@ static void w1_therm_run(sqlite3 * handle, const char * path, const char * name)
 	std::cerr << "w1_therm is stoped!" << std::endl;
 }
 
-static sqlite3 * init_sqlite()
+inline sqlite3 * init_sqlite()
 {
 	sqlite3 * handle{ nullptr };
 	if (sqlite3_open("w1_therm.db", &handle) != SQLITE_OK)
@@ -156,31 +172,65 @@ static sqlite3 * init_sqlite()
 	return handle;
 }
 
-static void cleanup_sqlite(sqlite3 * handle)
+inline void cleanup_sqlite(sqlite3 * handle)
 {
 	sqlite3_close(handle);
 	std::cerr << "Database is closed!" << std::endl;
 }
 
-static void check_arguments(int const argc, char ** argv)
+inline therm_config parse_arguments(int const argc, char ** argv)
 {
-	if (argc < 3)
+	therm_config config;
+
+	try
 	{
-		std::cerr << "usage: " << argv[0] << " <w1_slave_path> <name>" << std::endl;
+		if (argc < 3) throw std::invalid_argument{ "too few argument" };
+
+		constexpr auto * opts{ "p:n:d" };
+
+		for (int r; (r = getopt(argc, argv, opts)) != -1; )
+		{
+			switch(r)
+			{
+			case 'p':
+				config.path_ = optarg;
+				break;
+
+			case 'n':
+				config.name_ = optarg;
+				break;
+
+			case 'd':
+				config.daemonlize_ = true;
+				break;
+
+			default:
+				throw std::invalid_argument{"invalid argument"};
+			}
+		}
+	}
+	catch (std::invalid_argument const &)
+	{
+		std::cerr
+			<< "usage: " << argv[0] << "[options] -p <path> -n <name>" << std::endl
+			<< '\t' << "-p <path>" << '\t' << "Set the w1_slave path" << std::endl
+			<< '\t' << "-n <name>" << '\t' << "Set the senor name" << std::endl
+			<< "\t" << "-d \t"     << '\t' << "daemonlize if set" << std::endl;
 		exit(EXIT_FAILURE);
 	}
+
+	return config;
 }
 
 int main(int argc, char ** argv)
 {
-	check_arguments(argc, argv);
+	auto const config = parse_arguments(argc, argv);
 
 	init_signal_handle();
 
 	auto const handle = init_sqlite();
-	auto const path = argv[1];
-	auto const name = argv[2];
-	w1_therm_run(handle, path, name);
+
+	w1_therm_run(handle, config);
 
 	cleanup_sqlite(handle);
 }
