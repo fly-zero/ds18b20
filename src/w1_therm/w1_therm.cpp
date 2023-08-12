@@ -17,8 +17,10 @@
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 
-#include <sqlite3.h>
+#include "data_storage_base.h"
+#include "sqlite_storage.h"
 
 #ifndef likely
 # define likely(x) (__builtin_expect(!!(x), 1))
@@ -35,7 +37,13 @@ struct therm_config
 	bool         daemonlize_{ false };
 };
 
+using storage_t = std::aligned_union_t
+	< std::max(sizeof (sqlite_storage), sizeof(void *))
+	, sqlite_storage
+	>;
+
 static auto s_running = false;
+static storage_t s_storage;
 
 inline void init_signal_handle()
 {
@@ -87,30 +95,7 @@ inline std::optional<int> w1_slave_read(const char * path)
 	return ret;
 }
 
-inline void insert_record(sqlite3 * handle, const char * name, int therm, time_t now)
-{
-	char sql[256];
-	auto const len = snprintf(sql, sizeof sql,
-		"insert into tb_therm (name,therm,time) values ('%s',%d,%lu)", name, therm, now);
-	assert(len > 0 && static_cast<size_t>(len) < sizeof sql);
-	(void)len;
-
-	char * errmsg;
-	auto const err = sqlite3_exec(handle, sql, nullptr, nullptr, &errmsg);
-	if unlikely(err != SQLITE_OK)
-	{
-		syslog(LOG_USER | LOG_ERR, "Cannot insert record: %s\n", errmsg);
-		sqlite3_free(errmsg);
-	}
-	else
-	{
-#ifdef _DEBUG_
-		std::cerr << "new record: " << name << ',' << therm << ',' << now << std::endl;
-#endif
-	}
-}
-
-inline void w1_therm_run(sqlite3 * handle, const therm_config & config)
+inline void w1_therm_run(data_storage_base * handle, const therm_config & config)
 {
 	if (config.daemonlize_ && daemon(1, 0))
 	{
@@ -135,7 +120,7 @@ inline void w1_therm_run(sqlite3 * handle, const therm_config & config)
 			if likely(therm)
 			{
 				auto const utc_now = time(nullptr);
-				insert_record(handle, config.name_, *therm, utc_now);
+				handle->insert(config.name_, *therm, utc_now);
 			}
 		}
 
@@ -145,41 +130,16 @@ inline void w1_therm_run(sqlite3 * handle, const therm_config & config)
 	syslog(LOG_USER | LOG_INFO, "w1_therm is stopped!\n");
 }
 
-inline sqlite3 * init_sqlite()
+inline data_storage_base * init_sqlite(storage_t & storage)
 {
-	sqlite3 * handle{ nullptr };
-	if (sqlite3_open("w1_therm.db", &handle) != SQLITE_OK)
-	{
-		syslog(LOG_USER | LOG_ERR, "Cannot initialize SQLite\n");
-		sqlite3_close(handle);
-		exit(EXIT_FAILURE);
-	}
-
-	auto const sql =
-		"create table if not exists tb_therm("
-			"id    integer  primary key autoincrement,"
-			"name  text(64) not null,"
-			"therm integer  not null,"
-			"time  integer  not null"
-		")";
-
-	char * errmsg{ nullptr };
-	auto const err = sqlite3_exec(handle, sql, nullptr, nullptr, &errmsg);
-	if (err != SQLITE_OK)
-	{
-		syslog(LOG_USER | LOG_ERR, "Cannot create SQLite table: %s\n", errmsg);
-		sqlite3_close(handle);
-		exit(EXIT_FAILURE);
-	}
-
-	syslog(LOG_USER | LOG_INFO, "Database is opened!\n");
-	return handle;
+	auto const ret = new (&storage) sqlite_storage("w1_therm.db");
+	return ret;
 }
 
-inline void cleanup_sqlite(sqlite3 * handle)
+inline void cleanup_sqlite(storage_t & storage)
 {
-	sqlite3_close(handle);
-	syslog(LOG_USER | LOG_INFO, "Database is closed!\n");
+	auto const ptr = reinterpret_cast<sqlite_storage *>(&storage);
+	ptr->~sqlite_storage();
 }
 
 inline therm_config parse_arguments(int const argc, char ** argv)
@@ -252,11 +212,11 @@ int main(int argc, char ** argv)
 
 	init_signal_handle();
 
-	auto const handle = init_sqlite();
+	auto const handle = init_sqlite(s_storage);
 
 	w1_therm_run(handle, config);
 
-	cleanup_sqlite(handle);
+	cleanup_sqlite(s_storage);
 
 	deinit_log();
 }
