@@ -49,7 +49,7 @@ sqlite_storage::sqlite_storage(const char * path)
 
 	db_.reset(handle);
 
-	syslog(LOG_USER | LOG_INFO, "Database is opened!\n");
+	syslog(LOG_USER | LOG_INFO, "SQLite is initialized!\n");
 }
 
 sqlite_storage::~sqlite_storage()

@@ -1,7 +1,7 @@
 target=w1_therm
-src=w1_therm.cpp sqlite_storage.cpp
-obj=w1_therm.o sqlite_storage.o
-libs=-lsqlite3
+src=w1_therm.cpp sqlite_storage.cpp influx_storage.cpp
+obj=w1_therm.o sqlite_storage.o influx_storage.o
+libs=-lsqlite3 -lcurl
 defs=
 cxxflag=
 LNK=g++

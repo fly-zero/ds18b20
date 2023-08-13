@@ -22,9 +22,6 @@ PointerAlignment: Middle
 # 类访问控制符缩进
 AccessModifierOffset: -4
 
-# 函数参数缩进
-UseTab: Always
-
 # 大括号换行风格
 BraceWrapping:
 
@@ -36,3 +33,6 @@ BraceWrapping:
 
   # 结构体体的花括号换行风格：true表示放置于新行；false表示与结构体在同一行
   AfterStruct: true
+
+  # if语句体的花括号换行风格：true表示放置于新行；false表示与if语句在同一行
+  AfterIf: true
