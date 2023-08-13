@@ -4,6 +4,7 @@ obj=w1_therm.o sqlite_storage.o influx_storage.o
 libs=-lsqlite3 -lcurl
 defs=
 cxxflag=
+lnkflag=
 LNK=g++
 CXX=g++
 
@@ -16,13 +17,14 @@ debug: defs+=-D_DEBUG_
 debug: ${target}
 
 release: cxxflag+=-O3
+release: lnkflag+=-flto -O3
 release: ${target}
 
 clean:
 	rm -f ${obj} ${target}
 
 ${target}: ${obj}
-	${LNK} $^ -o $@ ${libs}
+	${LNK} ${lnkflag} $^ -o $@ ${libs}
 
 %.o: %.cpp
 	${CXX} -c -Wall -Werror -Wextra -std=c++20 ${cxxflag} ${defs} -o $@ $<
