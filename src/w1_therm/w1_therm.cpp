@@ -126,12 +126,6 @@ inline std::optional<int> w1_slave_read(const char * path)
 
 inline void w1_therm_run(data_storage_base * storage, const therm_config & config)
 {
-	if (config.daemonlize_ && daemon(1, 0))
-	{
-		syslog(LOG_USER | LOG_ERR, "Cannot daemonlize\n");
-		exit(EXIT_FAILURE);
-	}
-
 	syslog(LOG_USER | LOG_INFO, "w1_therm is started!\n");
 
 	s_running = true;
@@ -188,10 +182,10 @@ inline data_storage_base * init_storage(storage_t & storage, const therm_config 
 	}
 }
 
-inline void cleanup_sqlite(storage_t & storage)
+inline void cleanup_data_storage(storage_t & storage)
 {
-	auto const ptr = reinterpret_cast<sqlite_storage *>(&storage);
-	ptr->~sqlite_storage();
+	auto const ptr = reinterpret_cast<data_storage_base *>(&storage);
+	ptr->~data_storage_base();
 }
 
 inline void init_database_config(therm_config & config, const char * str)
@@ -313,9 +307,21 @@ inline void deinit_log()
 	closelog();
 }
 
+inline void daemonlize()
+{
+	if (daemon(1, 0))
+	{
+		syslog(LOG_USER | LOG_ERR, "Cannot daemonlize\n");
+		exit(EXIT_FAILURE);
+	}
+}
+
 int main(int argc, char ** argv)
 {
 	auto const config = parse_arguments(argc, argv);
+
+	if (config.daemonlize_)
+		daemonlize();
 
 	init_log(argv[0]);
 
@@ -325,7 +331,7 @@ int main(int argc, char ** argv)
 
 	w1_therm_run(storage, config);
 
-	cleanup_sqlite(s_storage);
+	cleanup_data_storage(s_storage);
 
 	deinit_log();
 }
