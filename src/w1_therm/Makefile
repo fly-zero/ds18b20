@@ -16,7 +16,7 @@ debug: cxxflag+=-g3
 debug: defs+=-D_DEBUG_
 debug: ${target}
 
-release: cxxflag+=-O3
+release: cxxflag+=-flto -O3
 release: lnkflag+=-flto -O3
 release: ${target}
 

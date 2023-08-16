@@ -67,8 +67,9 @@ struct therm_config
 };
 
 using storage_t = std::aligned_union_t
-	< std::max(sizeof (sqlite_storage), sizeof(void *))
+	< std::max({ sizeof (sqlite_storage), sizeof (influx_storage), sizeof(void *) })
 	, sqlite_storage
+	, influx_storage
 	>;
 
 static auto s_running = false;
