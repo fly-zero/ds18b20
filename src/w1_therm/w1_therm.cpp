@@ -9,6 +9,7 @@
 #include <cstring>
 #include <ctime>
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <limits>
