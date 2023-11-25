@@ -174,6 +174,7 @@ inline void init_signal_handle()
 inline std::optional<int> w1_slave_read(const char * path)
 {
     std::optional<int> ret;
+    char buf[256];
 
     do
     {
@@ -183,7 +184,7 @@ inline std::optional<int> w1_slave_read(const char * path)
 
         std::string_view line;
         std::string_view const flag{ "t=" };
-        char buf[256], *endptr;
+        char *endptr;
         int len;
 
         if (fscanf(fp.get(), "%[^\n]%n", buf, &len) != 1) break;
@@ -210,7 +211,8 @@ inline std::optional<int> w1_slave_read(const char * path)
         return ret;
     } while (false);
 
-    syslog(LOG_USER | LOG_ERR, "Cannot parse w1_slave\n");
+    syslog(LOG_USER | LOG_ERR, "Cannot parse w1_slave, data sample\n");
+    syslog(LOG_USER | LOG_ERR, "%s\n", buf);
     return ret;
 }
 
