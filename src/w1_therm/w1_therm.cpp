@@ -20,7 +20,9 @@
 #include <string_view>
 #include <type_traits>
 
-#include "data_storage_base.h"
+#include <boost/container/static_vector.hpp>
+#include <boost/static_string.hpp>
+
 #include "influx_storage.h"
 #include "sqlite_storage.h"
 
@@ -32,49 +34,100 @@
 # define unlikely(x) (__builtin_expect(!!(x), 0))
 #endif
 
-enum class storage_type : char
+/**
+ * @brief config for sqlite database
+ */
+struct sqlite_config
 {
-	sqlite,
-	influxdb,
-	unspecified,
+	std::string path_{ }; ///< path to sqlite database
 };
 
-struct sqlite_db_config
+/**
+ * @brief config for influx database
+ */
+struct influx_config
 {
-	std::string path_{ };
+	std::string host_{ };   ///< host of influxdb
+	std::string org_{ };    ///< organization of influxdb
+	std::string bucket_{ }; ///< bucket of influxdb
+	std::string token_{ };  ///< token of influxdb
 };
 
-struct influx_db_config
-{
-	std::string host_{ };
-	std::string org_{ };
-	std::string bucket_{ };
-	std::string token_{ };
-};
-
-using db_config_t = std::aligned_union_t
-	< std::max(sizeof (sqlite_db_config), sizeof (influx_db_config))
-	, sqlite_db_config
-	, influx_db_config
-	>;
-
+/**
+ * @brief global config
+ */
 struct therm_config
 {
-	std::string  path_{ };
-	std::string  name_{ };
-	storage_type type_{ storage_type::sqlite };
-	bool         daemonlize_{ false };
-	db_config_t  db_{ };
+	std::string   w1_slave_path_{ };    ///< path to w1_slave
+	std::string   senor_name_{ };       ///< name of senor
+	bool          daemonlize_{ false }; ///< daemonlize if set
+	sqlite_config sqlite_db_{ };        ///< config for sqlite database
+	influx_config influx_db_{ };        ///< config for influx database
 };
 
-using storage_t = std::aligned_union_t
-	< std::max({ sizeof (sqlite_storage), sizeof (influx_storage), sizeof(void *) })
-	, sqlite_storage
-	, influx_storage
-	>;
+struct storage_t
+{
+	storage_t(sqlite_storage && sqlite, influx_storage && influx)
+		: sqlite_{ std::move(sqlite) }
+		, influx_{ std::move(influx) }
+	{ }
+
+	void insert(const char * name, double value, time_t now);
+
+	size_t sqlite_count_{0}; ///< 执行 sqlite 插入的次数，不代表 sqlite 中的记录数
+	sqlite_storage sqlite_;
+	influx_storage influx_;
+};
 
 static auto s_running = false;
-static storage_t s_storage;
+
+void storage_t::insert(const char * name, double value, time_t now)
+{
+	if (sqlite_count_ == 0 && influx_.insert(name, value, now))
+		return;
+
+	++sqlite_count_;
+	sqlite_.insert(name, value, now);
+
+	if ((sqlite_count_ % 10) == 0 && influx_.is_bucket_exists()) while (true)
+	{
+		using name_t = boost::static_strings::static_string<64>;
+		using record_t = std::tuple<long, double, time_t, name_t>;
+		using vector_t = boost::container::static_vector<record_t, 100>;
+		vector_t records;
+
+		auto const callback = [](void * user, int argc, char ** argv, char ** col) -> int
+		{
+			assert(argc == 4);
+			assert(col[0] == std::string_view{ "id" });
+			assert(col[1] == std::string_view{ "name" });
+			assert(col[2] == std::string_view{ "therm" });
+			assert(col[3] == std::string_view{ "time" });
+			auto const id = std::atol(argv[0]);
+			auto const name = argv[1];
+			auto const value = std::atof(argv[2]);
+			auto const now = std::atol(argv[3]);
+			auto & records = *static_cast<vector_t *>(user);
+			records.emplace_back(id, value, now, name);
+			return 0;
+		};
+
+		sqlite_.select(records.capacity(), callback, &records);
+
+		auto i = 0;
+		for (auto const & [id, value, now, name] : records)
+		{
+			auto const ok = influx_.insert(name.data(), value, now);
+			if (!ok) break;
+			++i;
+		}
+
+		if (i == 0) break;
+
+		sqlite_count_ = 0;
+		sqlite_.delete_where_id_not_greater_than(std::get<0>(records[i - 1]));
+	}
+}
 
 inline void init_signal_handle()
 {
@@ -126,7 +179,7 @@ inline std::optional<int> w1_slave_read(const char * path)
 	return ret;
 }
 
-inline void w1_therm_run(data_storage_base * storage, const therm_config & config)
+inline void w1_therm_run(storage_t & storage, const therm_config & config)
 {
 	syslog(LOG_USER | LOG_INFO, "w1_therm is started!\n");
 
@@ -141,11 +194,11 @@ inline void w1_therm_run(data_storage_base * storage, const therm_config & confi
 		if (next_read_time <= now)
 		{
 			next_read_time = now + interval;
-			auto const therm = w1_slave_read(config.path_.c_str());
+			auto const therm = w1_slave_read(config.w1_slave_path_.c_str());
 			if likely(therm)
 			{
 				auto const utc_now = time(nullptr);
-				storage->insert(config.name_.c_str(), *therm / double(1000), utc_now);
+				storage.insert(config.senor_name_.c_str(), *therm / double(1000), utc_now);
 			}
 		}
 
@@ -155,86 +208,77 @@ inline void w1_therm_run(data_storage_base * storage, const therm_config & confi
 	syslog(LOG_USER | LOG_INFO, "w1_therm is stopped!\n");
 }
 
-inline data_storage_base * init_sqlite(storage_t & storage, const therm_config & config)
+inline storage_t init_storage(const therm_config & config)
 {
-	auto & db = reinterpret_cast<const sqlite_db_config &>(config.db_);
-	auto const ret = new (&storage) sqlite_storage(db.path_.c_str());
-	return ret;
+	sqlite_storage sqlite{config.sqlite_db_.path_.c_str()};
+	influx_storage influx{config.influx_db_.host_,
+						  config.influx_db_.org_,
+						  config.influx_db_.bucket_,
+						  config.influx_db_.token_,
+						  "home",
+						  "temperature"};
+	return { std::move(sqlite), std::move(influx) };
 }
 
-inline data_storage_base * init_influxdb(storage_t & storage, const therm_config & config)
+inline void init_influx_config(therm_config & config, const char * str)
 {
-	auto & db = reinterpret_cast<const influx_db_config &>(config.db_);
-	auto const ret = new (&storage) influx_storage(
-		db.host_, db.org_, db.bucket_, db.token_, "home", "temperature");
-	return ret;
-}
-
-inline data_storage_base * init_storage(storage_t & storage, const therm_config & config)
-{
-	switch (config.type_)
-	{
-	case storage_type::sqlite:
-		return init_sqlite(storage, config);
-	case storage_type::influxdb:
-		return init_influxdb(storage, config);
-	default:
-		assert(false);
-		return nullptr;
-	}
-}
-
-inline void cleanup_data_storage(storage_t & storage)
-{
-	auto const ptr = reinterpret_cast<data_storage_base *>(&storage);
-	ptr->~data_storage_base();
-}
-
-inline void init_database_config(therm_config & config, const char * str)
-{
-	// valid settings:
-	//   "sqlite://path/to/db"
-	//   "influxdb://host/org/bucket/token"
-
+	// valid settings: "host/org/bucket/token"
 	assert(str);
 
-	if (strncmp(str, "sqlite://", 9) == 0)
-	{
-		config.type_ = storage_type::sqlite;
-		auto const db = new (&config.db_) sqlite_db_config;
-		db->path_.assign(str + 9);
-	}
-	else if (strncmp(str, "influxdb://", 11) == 0)
-	{
-		config.type_ = storage_type::influxdb;
-		auto const db = new (&config.db_) influx_db_config;
-
-		// set host
-		auto bgn = str + 11;
-		auto end = strchr(bgn, '/');
-		if (!end) throw std::invalid_argument{ "invalid db settings" };
-		db->host_.assign(bgn, static_cast<size_t>(end - bgn));
-
-		// set org
-		bgn = end + 1;
-		end = strchr(bgn, '/');
-		if (!end) throw std::invalid_argument{ "invalid db settings" };
-		db->org_.assign(bgn, static_cast<size_t>(end - bgn));
-
-		// set bucket
-		bgn = end + 1;
-		end = strchr(bgn, '/');
-		if (!end) throw std::invalid_argument{ "invalid db settings" };
-		db->bucket_.assign(bgn, static_cast<size_t>(end - bgn));
-
-		// set token
-		bgn = end + 1;
-		if (*bgn == 0) throw std::invalid_argument{ "invalid db settings" };
-		db->token_.assign(bgn);
-	}
-	else
-	{
+	// set host
+	auto bgn = str;
+	auto end = strchr(bgn, '/');
+	if (!end)
 		throw std::invalid_argument{ "invalid db settings" };
+	config.influx_db_.host_.assign(bgn, static_cast<size_t>(end - bgn));
+
+	// set org
+	bgn = end + 1;
+	end = strchr(bgn, '/');
+	if (!end)
+		throw std::invalid_argument{ "invalid db settings" };
+	config.influx_db_.org_.assign(bgn, static_cast<size_t>(end - bgn));
+
+	// set bucket
+	bgn = end + 1;
+	end = strchr(bgn, '/');
+	if (!end)
+		throw std::invalid_argument{ "invalid db settings" };
+	config.influx_db_.bucket_.assign(bgn, static_cast<size_t>(end - bgn));
+
+	// set token
+	bgn = end + 1;
+	if (*bgn == 0)
+		throw std::invalid_argument{ "invalid db settings" };
+	config.influx_db_.token_.assign(bgn);
+}
+
+inline void load_config_file(therm_config & config, const char * path)
+{
+	// demo config file:
+	// sqlite w1_therm.db
+	// influx host/org/bucket/token
+
+	assert(path);
+	auto const file_deleter = [](FILE * fp) { fclose(fp); };
+	std::unique_ptr<FILE, decltype(file_deleter)> fp{ fopen(path, "r"), file_deleter };
+	if (!fp)
+		throw std::runtime_error{ "Cannot open config file" };
+
+	char buf[256];
+	while (fgets(buf, sizeof buf, fp.get()))
+	{
+		auto const len = strlen(buf);
+		if (len == 0 || buf[len - 1] != '\n')
+			throw std::runtime_error{ "Invalid config file" };
+		buf[len - 1] = 0;
+
+		if (strncmp(buf, "sqlite ", 7) == 0)
+			config.sqlite_db_.path_.assign(buf + 7);
+		else if (strncmp(buf, "influx ", 7) == 0)
+			init_influx_config(config, buf + 7);
+		else
+			throw std::runtime_error{ "Invalid config file" };
 	}
 }
 
@@ -247,26 +291,26 @@ inline therm_config parse_arguments(int const argc, char ** argv)
 		if (argc < 3)
 			throw std::invalid_argument{ "too few argument" };
 
-		constexpr auto * opts{ "p:n:b:d" };
+		constexpr auto * opts{ "p:n:d:c:" };
 
 		for (int r; (r = getopt(argc, argv, opts)) != -1; )
 		{
 			switch(r)
 			{
 			case 'p':
-				config.path_ = optarg;
+				config.w1_slave_path_ = optarg;
 				break;
 
 			case 'n':
-				config.name_ = optarg;
+				config.senor_name_ = optarg;
 				break;
 
 			case 'd':
 				config.daemonlize_ = true;
 				break;
 
-			case 'b':
-				init_database_config(config, optarg);
+			case 'c':
+				load_config_file(config, optarg);
 				break;
 
 			default:
@@ -274,12 +318,8 @@ inline therm_config parse_arguments(int const argc, char ** argv)
 			}
 		}
 
-		if (config.name_.empty() || config.name_.empty())
+		if (config.senor_name_.empty() || config.senor_name_.empty())
 			throw std::invalid_argument{ "invalid argument" };
-
-		// set default database
-		if (config.type_ == storage_type::unspecified)
-			init_database_config(config, "sqlite://w1_therm.db");
 	}
 	catch (std::invalid_argument const &)
 	{
@@ -287,7 +327,6 @@ inline therm_config parse_arguments(int const argc, char ** argv)
 			<< "usage: " << argv[0] << " [options] -p <path> -n <name>" << std::endl
 			<< '\t' << "-p <path>" << '\t' << "Set the w1_slave path" << std::endl
 			<< '\t' << "-n <name>" << '\t' << "Set the senor name" << std::endl
-			<< '\t' << "-b <db>  " << '\t' << "Set the database, must be sqlite(default) or influxdb" << std::endl
 			<< '\t' << "-d       " << '\t' << "daemonlize if set" << std::endl;
 		exit(EXIT_FAILURE);
 	}
@@ -329,11 +368,9 @@ int main(int argc, char ** argv)
 
 	init_signal_handle();
 
-	auto const storage = init_storage(s_storage, config);
+	auto storage = init_storage(config);
 
 	w1_therm_run(storage, config);
-
-	cleanup_data_storage(s_storage);
 
 	deinit_log();
 }

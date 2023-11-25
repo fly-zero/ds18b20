@@ -6,10 +6,7 @@
 
 #include <curl/curl.h>
 
-#include "data_storage_base.h"
-
 class influx_storage
-    : public data_storage_base
 {
     struct curl_deleter
     {
@@ -32,15 +29,23 @@ public:
                    std::string measurement,
                    std::string field);
 
+    influx_storage(const influx_storage &) = delete;
+
+    influx_storage(influx_storage &&) noexcept = default;
+
     ~influx_storage() = default;
 
-    void insert(const char * name, double value, time_t now) override;
+    influx_storage & operator=(const influx_storage &) = delete;
+
+    influx_storage & operator=(influx_storage &&) noexcept = default;
+
+    bool insert(const char * name, double value, time_t now);
+
+    bool is_bucket_exists() const;
 
 protected:
     static size_t write_callback(
         char * ptr, size_t size, size_t nmemb, void * userdata);
-
-    bool is_bucket_exists() const;
 
 private:
     std::string host_;

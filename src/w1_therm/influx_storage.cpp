@@ -1,5 +1,3 @@
-#include <syslog.h>
-
 #include <cassert>
 #include <cstddef>
 
@@ -35,18 +33,21 @@ influx_storage::influx_storage(std::string host,
     , measurement_{ std::move(measurement) }
     , field_{ std::move(field) }
 {
-    if (host_.empty()) throw std::invalid_argument{ "host is empty" };
-    if (org_.empty()) throw std::invalid_argument{ "org is empty" };
-    if (bucket_.empty()) throw std::invalid_argument{ "bucket is empty" };
-    if (token_.empty()) throw std::invalid_argument{ "token is empty" };
-    if (measurement_.empty()) throw std::invalid_argument{ "measurement is empty" };
-    if (field_.empty()) throw std::invalid_argument{ "field is empty" };
-    if (!is_bucket_exists()) throw std::runtime_error{ "bucket does not exist" };
-
-    syslog(LOG_USER | LOG_INFO, "InfluxDB is initialized!\n");
+    if (host_.empty())
+        throw std::invalid_argument{ "host is empty" };
+    if (org_.empty())
+        throw std::invalid_argument{ "org is empty" };
+    if (bucket_.empty())
+        throw std::invalid_argument{ "bucket is empty" };
+    if (token_.empty())
+        throw std::invalid_argument{ "token is empty" };
+    if (measurement_.empty())
+        throw std::invalid_argument{ "measurement is empty" };
+    if (field_.empty())
+        throw std::invalid_argument{ "field is empty" };
 }
 
-void influx_storage::insert(const char * name, double value, time_t now)
+bool influx_storage::insert(const char * name, double value, time_t now)
 {
     // construct influx line protocol
     std::string line;
@@ -64,11 +65,7 @@ void influx_storage::insert(const char * name, double value, time_t now)
 
     // init curl
     curl_ptr curl{curl_easy_init()};
-    if (!curl)
-    {
-        syslog(LOG_USER | LOG_ERR, "curl_easy_init() failed");
-        return;
-    }
+    if (!curl) return false;
 
     // set url
     std::string url = "http://" + host_ + "/api/v2/write?bucket=" + bucket_ + "&org=" + org_ + "&precision=s";
@@ -97,32 +94,17 @@ void influx_storage::insert(const char * name, double value, time_t now)
 
     // perform request
     CURLcode res = curl_easy_perform(curl.get());
-    if (res != CURLE_OK)
-    {
-        syslog(LOG_USER | LOG_ERR, "curl_easy_perform() failed: %s", curl_easy_strerror(res));
-        return;
-    }
+    if (res != CURLE_OK) return false;
 
     // check response code
     long response_code = 0;
     curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &response_code);
-    if (response_code / 100 != 2)
-    {
-        syslog(LOG_USER | LOG_ERR, "unexpected response code: %ld", response_code);
-        return;
-    }
+    if (response_code / 100 != 2) return false;
 
 #ifdef _DEBUG_
     std::cerr << "new record: " << name << ',' << value << ',' << now << std::endl;
 #endif
-}
-
-size_t influx_storage::write_callback(char * ptr, size_t size, size_t nmemb, void * userdata)
-{
-    auto & body = *static_cast<std::string *>(userdata);
-    auto const len = size * nmemb;
-    body.append(ptr, len);
-    return len;
+    return true;
 }
 
 bool influx_storage::is_bucket_exists() const
@@ -186,4 +168,12 @@ bool influx_storage::is_bucket_exists() const
     }
 
     return false;
+}
+
+size_t influx_storage::write_callback(char * ptr, size_t size, size_t nmemb, void * userdata)
+{
+    auto & body = *static_cast<std::string *>(userdata);
+    auto const len = size * nmemb;
+    body.append(ptr, len);
+    return len;
 }

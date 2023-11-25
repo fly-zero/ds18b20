@@ -80,3 +80,35 @@ void sqlite_storage::insert(const char * name, const double value, time_t now)
 #endif
 	}
 }
+
+void sqlite_storage::select(size_t count, int (*callback)(void*,int,char**,char**), void * user)
+{
+	char sql[256];
+	auto const len = snprintf(sql, sizeof sql, "select * from tb_therm limit %zu", count);
+	assert(len > 0 && static_cast<size_t>(len) < sizeof sql);
+	(void)len;
+
+	char * errmsg;
+	auto const err = sqlite3_exec(db_.get(), "select * from tb_therm", callback, user, &errmsg);
+	if unlikely(err != SQLITE_OK)
+	{
+		syslog(LOG_USER | LOG_ERR, "Cannot select records: %s\n", errmsg);
+		sqlite3_free(errmsg);
+	}
+}
+
+void sqlite_storage::delete_where_id_not_greater_than(size_t id)
+{
+	char sql[256];
+	auto const len = snprintf(sql, sizeof sql, "delete from tb_therm where id <= %zu", id);
+	assert(len > 0 && static_cast<size_t>(len) < sizeof sql);
+	(void)len;
+
+	char * errmsg;
+	auto const err = sqlite3_exec(db_.get(), sql, nullptr, nullptr, &errmsg);
+	if unlikely(err != SQLITE_OK)
+	{
+		syslog(LOG_USER | LOG_ERR, "Cannot delete records: %s\n", errmsg);
+		sqlite3_free(errmsg);
+	}
+}

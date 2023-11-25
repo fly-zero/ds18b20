@@ -4,30 +4,39 @@
 
 #include <sqlite3.h>
 
-#include "data_storage_base.h"
-
 class sqlite_storage
-    : public data_storage_base
 {
-    struct sqlite3_deleter
+    struct deleter
     {
         void operator()(sqlite3 * db) const;
     };
 
-    using sqlite3_ptr = std::unique_ptr<sqlite3, sqlite3_deleter>;
+    using sqlite3_ptr = std::unique_ptr<sqlite3, deleter>;
 
 public:
     explicit sqlite_storage(const char * path);
 
+    sqlite_storage(const sqlite_storage &) = delete;
+
+    sqlite_storage(sqlite_storage &&) noexcept = default;
+
     ~sqlite_storage();
 
-    void insert(const char * name, double value, time_t now) override;
+    void operator=(const sqlite_storage &) = delete;
+
+    sqlite_storage & operator=(sqlite_storage &&) noexcept = default;
+
+    void insert(const char * name, double value, time_t now);
+
+    void select(size_t count, int (*callback)(void*,int,char**,char**), void * user);
+
+    void delete_where_id_not_greater_than(size_t id);
 
 private:
     sqlite3_ptr db_{ };
 };
 
-inline void sqlite_storage::sqlite3_deleter::operator()(sqlite3 * db) const
+inline void sqlite_storage::deleter::operator()(sqlite3 * db) const
 {
     sqlite3_close(db);
 }
