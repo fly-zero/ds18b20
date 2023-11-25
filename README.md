@@ -5,6 +5,7 @@
 # 依赖
 * boost
 * curl
+* rapidjson
 * sqlite3
 
 # 编译
