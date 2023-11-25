@@ -1,5 +1,3 @@
-#include <syslog.h>
-
 #include <cassert>
 
 #include <stdexcept>
@@ -25,7 +23,6 @@ sqlite_storage::sqlite_storage(const char * path)
 	sqlite3 * handle{ nullptr };
 	if (sqlite3_open(path, &handle) != SQLITE_OK)
 	{
-		syslog(LOG_USER | LOG_ERR, "Cannot initialize SQLite\n");
 		sqlite3_close(handle);
 		throw std::runtime_error{ "Cannot initialize SQLite" };
 	}
@@ -42,20 +39,16 @@ sqlite_storage::sqlite_storage(const char * path)
 	auto const err = sqlite3_exec(handle, sql, nullptr, nullptr, &errmsg);
 	if (err != SQLITE_OK)
 	{
-		syslog(LOG_USER | LOG_ERR, "Cannot create SQLite table: %s\n", errmsg);
 		sqlite3_close(handle);
 		throw std::runtime_error{ "Cannot create SQLite table" };
 	}
 
 	db_.reset(handle);
-
-	syslog(LOG_USER | LOG_INFO, "SQLite is initialized!\n");
 }
 
 sqlite_storage::~sqlite_storage()
 {
 	sqlite3_close(db_.release());
-	syslog(LOG_USER | LOG_INFO, "Database is closed!\n");
 }
 
 void sqlite_storage::insert(const char * name, const double value, time_t now)
@@ -70,7 +63,7 @@ void sqlite_storage::insert(const char * name, const double value, time_t now)
 	auto const err = sqlite3_exec(db_.get(), sql, nullptr, nullptr, &errmsg);
 	if unlikely(err != SQLITE_OK)
 	{
-		syslog(LOG_USER | LOG_ERR, "Cannot insert record: %s\n", errmsg);
+		throw std::runtime_error{ "Cannot insert record: " + std::string{ errmsg } };
 		sqlite3_free(errmsg);
 	}
 	else
@@ -92,7 +85,7 @@ void sqlite_storage::select(size_t count, int (*callback)(void*,int,char**,char*
 	auto const err = sqlite3_exec(db_.get(), "select * from tb_therm", callback, user, &errmsg);
 	if unlikely(err != SQLITE_OK)
 	{
-		syslog(LOG_USER | LOG_ERR, "Cannot select records: %s\n", errmsg);
+		throw std::runtime_error{ "Cannot select records: " + std::string{ errmsg } };
 		sqlite3_free(errmsg);
 	}
 }
@@ -108,7 +101,7 @@ void sqlite_storage::delete_where_id_not_greater_than(size_t id)
 	auto const err = sqlite3_exec(db_.get(), sql, nullptr, nullptr, &errmsg);
 	if unlikely(err != SQLITE_OK)
 	{
-		syslog(LOG_USER | LOG_ERR, "Cannot delete records: %s\n", errmsg);
+		throw std::runtime_error{ "Cannot delete records: " + std::string{ errmsg } };
 		sqlite3_free(errmsg);
 	}
 }

@@ -39,7 +39,7 @@ public:
 
     influx_storage & operator=(influx_storage &&) noexcept = default;
 
-    bool insert(const char * name, double value, time_t now);
+    void insert(const char * name, double value, time_t now);
 
     bool is_bucket_exists() const;
 

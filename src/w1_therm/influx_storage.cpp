@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstddef>
+#include <stdexcept>
 
 #ifdef _DEBUG_
 #include <iostream>
@@ -47,7 +48,7 @@ influx_storage::influx_storage(std::string host,
         throw std::invalid_argument{ "field is empty" };
 }
 
-bool influx_storage::insert(const char * name, double value, time_t now)
+void influx_storage::insert(const char * name, double value, time_t now)
 {
     // construct influx line protocol
     std::string line;
@@ -65,7 +66,8 @@ bool influx_storage::insert(const char * name, double value, time_t now)
 
     // init curl
     curl_ptr curl{curl_easy_init()};
-    if (!curl) return false;
+    if (!curl)
+        throw std::runtime_error{"curl_easy_init failed"};
 
     // set url
     std::string url = "http://" + host_ + "/api/v2/write?bucket=" + bucket_ + "&org=" + org_ + "&precision=s";
@@ -94,17 +96,18 @@ bool influx_storage::insert(const char * name, double value, time_t now)
 
     // perform request
     CURLcode res = curl_easy_perform(curl.get());
-    if (res != CURLE_OK) return false;
+    if (res != CURLE_OK)
+        throw std::runtime_error{curl_easy_strerror(res)};
 
     // check response code
     long response_code = 0;
     curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &response_code);
-    if (response_code / 100 != 2) return false;
+    if (response_code / 100 != 2)
+        throw std::runtime_error{"influxdb response code: " + std::to_string(response_code)};
 
 #ifdef _DEBUG_
     std::cerr << "new record: " << name << ',' << value << ',' << now << std::endl;
 #endif
-    return true;
 }
 
 bool influx_storage::is_bucket_exists() const

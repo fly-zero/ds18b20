@@ -83,11 +83,25 @@ static auto s_running = false;
 
 void storage_t::insert(const char * name, double value, time_t now)
 {
-	if (sqlite_count_ == 0 && influx_.insert(name, value, now))
+	if (sqlite_count_ == 0) try
+	{
+		influx_.insert(name, value, now);
 		return;
+	}
+	catch (std::exception const & e)
+	{
+		syslog(LOG_USER | LOG_ERR, "Cannot insert to influxdb: %s\n", e.what());
+	}
 
 	++sqlite_count_;
-	sqlite_.insert(name, value, now);
+	try
+	{
+		sqlite_.insert(name, value, now);
+	}
+	catch (std::exception const & e)
+	{
+		syslog(LOG_USER | LOG_ERR, "Cannot insert to sqlite: %s\n", e.what());
+	}
 
 	if ((sqlite_count_ % 10) == 0 && influx_.is_bucket_exists()) while (true)
 	{
@@ -112,20 +126,41 @@ void storage_t::insert(const char * name, double value, time_t now)
 			return 0;
 		};
 
-		sqlite_.select(records.capacity(), callback, &records);
+		try
+		{
+			sqlite_.select(records.capacity(), callback, &records);
+		}
+		catch (std::exception const & e)
+		{
+			syslog(LOG_USER | LOG_ERR, "Cannot select from sqlite: %s\n", e.what());
+			break;
+		}
 
 		auto i = 0;
-		for (auto const & [id, value, now, name] : records)
+		for (auto const & [id, value, now, name] : records) try
 		{
-			auto const ok = influx_.insert(name.data(), value, now);
-			if (!ok) break;
+			influx_.insert(name.data(), value, now);
 			++i;
+		}
+		catch (std::exception const & e)
+		{
+			syslog(LOG_USER | LOG_ERR, "Cannot insert to influxdb: %s\n", e.what());
+			break;
 		}
 
 		if (i == 0) break;
 
 		sqlite_count_ = 0;
-		sqlite_.delete_where_id_not_greater_than(std::get<0>(records[i - 1]));
+
+		try
+		{
+			sqlite_.delete_where_id_not_greater_than(std::get<0>(records[i - 1]));
+		}
+		catch (std::exception const & e)
+		{
+			syslog(LOG_USER | LOG_ERR, "Cannot delete from sqlite: %s\n", e.what());
+			break;
+		}
 	}
 }
 
@@ -217,6 +252,7 @@ inline storage_t init_storage(const therm_config & config)
 						  config.influx_db_.token_,
 						  "home",
 						  "temperature"};
+	syslog(LOG_USER | LOG_INFO, "sqlite3 and influxdb are initialized!\n");
 	return { std::move(sqlite), std::move(influx) };
 }
 
