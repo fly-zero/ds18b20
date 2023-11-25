@@ -327,7 +327,7 @@ inline therm_config parse_arguments(int const argc, char ** argv)
         if (argc < 3)
             throw std::invalid_argument{ "too few argument" };
 
-        constexpr auto * opts{ "p:n:d:c:" };
+        constexpr auto * opts{ "p:n:c:d" };
 
         for (int r; (r = getopt(argc, argv, opts)) != -1; )
         {
