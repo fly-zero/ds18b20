@@ -82,7 +82,7 @@ void sqlite_storage::select(size_t count, int (*callback)(void*,int,char**,char*
     (void)len;
 
     char * errmsg;
-    auto const err = sqlite3_exec(db_.get(), "select * from tb_therm", callback, user, &errmsg);
+    auto const err = sqlite3_exec(db_.get(), sql, callback, user, &errmsg);
     if unlikely(err != SQLITE_OK)
     {
         throw std::runtime_error{ "Cannot select records: " + std::string{ errmsg } };
