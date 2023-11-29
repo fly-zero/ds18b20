@@ -48,26 +48,27 @@ influx_storage::influx_storage(std::string host,
         throw std::invalid_argument{ "field is empty" };
 }
 
-void influx_storage::insert(const char * name, double value, time_t now)
+void influx_storage::prepare_data(std::string & data, const char * name, double value, time_t now)
 {
     // construct influx line protocol
-    std::string line;
-    line.reserve(measurement_.size() + field_.size() + 64);
-    line += measurement_;
-    line += ",name=";
-    line += name;
-    line += ' ';
-    line += field_;
-    line += '=';
-    line += std::to_string(value);
-    line += ' ';
-    line += std::to_string(now);
-    line += '\n';
+    data += measurement_;
+    data += ",name=";
+    data += name;
+    data += ' ';
+    data += field_;
+    data += '=';
+    data += std::to_string(value);
+    data += ' ';
+    data += std::to_string(now);
+    data += '\n';
+}
 
+void influx_storage::insert(const std::string & data)
+{
     // init curl
     curl_ptr curl{curl_easy_init()};
     if (!curl)
-        throw std::runtime_error{"curl_easy_init failed"};
+        throw runtime_error{"curl_easy_init failed"};
 
     // set url
     std::string url = "http://" + host_ + "/api/v2/write?bucket=" + bucket_ + "&org=" + org_ + "&precision=s";
@@ -86,8 +87,8 @@ void influx_storage::insert(const char * name, double value, time_t now)
     curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers);
 
     // set body
-    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, line.c_str());
-    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE, line.size());
+    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, data.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE, data.size());
 
     // set callback
     std::string response_body;
@@ -97,16 +98,15 @@ void influx_storage::insert(const char * name, double value, time_t now)
     // perform request
     CURLcode res = curl_easy_perform(curl.get());
     if (res != CURLE_OK)
-        throw std::runtime_error{curl_easy_strerror(res)};
+        throw runtime_error{curl_easy_strerror(res)};
 
     // check response code
     long response_code = 0;
     curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &response_code);
     if (response_code / 100 != 2)
-        throw std::runtime_error{"influxdb response code: " + std::to_string(response_code)};
-
+        throw runtime_error{"influxdb response code: " + std::to_string(response_code)};
 #ifdef _DEBUG_
-    std::cerr << "new record: " << name << ',' << value << ',' << now << std::endl;
+    std::cerr << "new record: \n" << data << std::endl;
 #endif
 }
 

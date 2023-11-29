@@ -8,6 +8,10 @@
 
 class influx_storage
 {
+public:
+    struct runtime_error;
+
+private:
     struct curl_deleter
     {
         void operator()(CURL * curl) const;
@@ -41,6 +45,10 @@ public:
 
     void insert(const char * name, double value, time_t now);
 
+    void prepare_data(std::string & data, const char * name, double value, time_t now);
+
+    void insert(const std::string & data);
+
     bool is_bucket_exists() const;
 
 protected:
@@ -55,3 +63,15 @@ private:
     std::string measurement_;
     std::string field_;
 };
+
+struct influx_storage::runtime_error : public std::runtime_error
+{
+    using std::runtime_error::runtime_error;
+};
+
+inline void influx_storage::insert(const char * name, double value, time_t now)
+{
+    std::string data;
+    prepare_data(data, name, value, now);
+    insert(data);
+}

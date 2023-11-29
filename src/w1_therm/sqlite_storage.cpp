@@ -24,7 +24,7 @@ sqlite_storage::sqlite_storage(const char * path)
     if (sqlite3_open(path, &handle) != SQLITE_OK)
     {
         sqlite3_close(handle);
-        throw std::runtime_error{ "Cannot initialize SQLite" };
+        throw runtime_error{ "Cannot initialize SQLite" };
     }
 
     auto const sql =
@@ -40,7 +40,7 @@ sqlite_storage::sqlite_storage(const char * path)
     if (err != SQLITE_OK)
     {
         sqlite3_close(handle);
-        throw std::runtime_error{ "Cannot create SQLite table" };
+        throw runtime_error{ "Cannot create SQLite table" };
     }
 
     db_.reset(handle);
@@ -63,7 +63,7 @@ void sqlite_storage::insert(const char * name, const double value, time_t now)
     auto const err = sqlite3_exec(db_.get(), sql, nullptr, nullptr, &errmsg);
     if unlikely(err != SQLITE_OK)
     {
-        throw std::runtime_error{ "Cannot insert record: " + std::string{ errmsg } };
+        throw runtime_error{ "Cannot insert record: " + std::string{ errmsg } };
         sqlite3_free(errmsg);
     }
     else
@@ -85,7 +85,7 @@ void sqlite_storage::select(size_t count, int (*callback)(void*,int,char**,char*
     auto const err = sqlite3_exec(db_.get(), sql, callback, user, &errmsg);
     if unlikely(err != SQLITE_OK)
     {
-        throw std::runtime_error{ "Cannot select records: " + std::string{ errmsg } };
+        throw runtime_error{ "Cannot select records: " + std::string{ errmsg } };
         sqlite3_free(errmsg);
     }
 }
@@ -101,7 +101,7 @@ void sqlite_storage::delete_where_id_not_greater_than(size_t id)
     auto const err = sqlite3_exec(db_.get(), sql, nullptr, nullptr, &errmsg);
     if unlikely(err != SQLITE_OK)
     {
-        throw std::runtime_error{ "Cannot delete records: " + std::string{ errmsg } };
+        throw runtime_error{ "Cannot delete records: " + std::string{ errmsg } };
         sqlite3_free(errmsg);
     }
 }

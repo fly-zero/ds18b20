@@ -1,3 +1,4 @@
+#include <string>
 #include <syslog.h>
 #include <unistd.h>
 #include <wait.h>
@@ -83,84 +84,68 @@ static auto s_running = false;
 
 void storage_t::insert(const char * name, double value, time_t now)
 {
-    if (sqlite_count_ == 0) try
-    {
-        influx_.insert(name, value, now);
-        return;
-    }
-    catch (std::exception const & e)
-    {
-        syslog(LOG_USER | LOG_ERR, "Cannot insert to influxdb: %s\n", e.what());
-    }
-
-    ++sqlite_count_;
     try
     {
+        if (sqlite_count_ == 0)
+        {
+            influx_.insert(name, value, now);
+            return;
+        }
+
+        ++sqlite_count_;
         sqlite_.insert(name, value, now);
+
+        if ((sqlite_count_ % 10) != 0 || !influx_.is_bucket_exists())
+        {
+            return;
+        }
+
+        for (std::string data; ; data.clear())
+        {
+            long id;
+            using user_data_t = std::tuple<influx_storage *, std::string *, long *>;
+            user_data_t user{ &influx_, &data, &id };
+
+            auto const callback = [](void * user, int argc, char ** argv, char ** col) -> int
+            {
+                assert(argc == 4);
+                assert(col[0] == std::string_view{ "id" });
+                assert(col[1] == std::string_view{ "name" });
+                assert(col[2] == std::string_view{ "therm" });
+                assert(col[3] == std::string_view{ "time" });
+                auto const id = std::atol(argv[0]);
+                auto const name = argv[1];
+                auto const value = std::atof(argv[2]);
+                auto const time = std::atol(argv[3]);
+                auto const [influx, data, pid] = *static_cast<user_data_t *>(user);
+                assert(*pid < id);
+                *pid = id;
+                influx->prepare_data(*data, name, value, time);
+                return 0;
+            };
+
+            sqlite_.select(200, callback, &user);
+            if (data.empty())
+            {
+                break;
+            }
+
+            influx_.insert(data);
+            sqlite_.delete_where_id_not_greater_than(id);
+            sqlite_count_ = 0;
+        }
+    }
+    catch (influx_storage::runtime_error const & e)
+    {
+        syslog(LOG_USER | LOG_ERR, "influx error: %s\n", e.what());
+    }
+    catch (sqlite_storage::runtime_error const & e)
+    {
+        syslog(LOG_USER | LOG_ERR, "sqlite error: %s\n", e.what());
     }
     catch (std::exception const & e)
     {
-        syslog(LOG_USER | LOG_ERR, "Cannot insert to sqlite: %s\n", e.what());
-    }
-
-    if ((sqlite_count_ % 10) == 0 && influx_.is_bucket_exists()) while (true)
-    {
-        using name_t = boost::static_strings::static_string<64>;
-        using record_t = std::tuple<long, double, time_t, name_t>;
-        using vector_t = boost::container::static_vector<record_t, 100>;
-        vector_t records;
-
-        auto const callback = [](void * user, int argc, char ** argv, char ** col) -> int
-        {
-            assert(argc == 4);
-            assert(col[0] == std::string_view{ "id" });
-            assert(col[1] == std::string_view{ "name" });
-            assert(col[2] == std::string_view{ "therm" });
-            assert(col[3] == std::string_view{ "time" });
-            auto const id = std::atol(argv[0]);
-            auto const name = argv[1];
-            auto const value = std::atof(argv[2]);
-            auto const now = std::atol(argv[3]);
-            auto & records = *static_cast<vector_t *>(user);
-            records.emplace_back(id, value, now, name);
-            return 0;
-        };
-
-        try
-        {
-            sqlite_.select(records.capacity(), callback, &records);
-        }
-        catch (std::exception const & e)
-        {
-            syslog(LOG_USER | LOG_ERR, "Cannot select from sqlite: %s\n", e.what());
-            break;
-        }
-
-        auto i = 0;
-        for (auto const & [id, value, now, name] : records) try
-        {
-            influx_.insert(name.data(), value, now);
-            ++i;
-        }
-        catch (std::exception const & e)
-        {
-            syslog(LOG_USER | LOG_ERR, "Cannot insert to influxdb: %s\n", e.what());
-            break;
-        }
-
-        if (i == 0) break;
-
-        sqlite_count_ = 0;
-
-        try
-        {
-            sqlite_.delete_where_id_not_greater_than(std::get<0>(records[i - 1]));
-        }
-        catch (std::exception const & e)
-        {
-            syslog(LOG_USER | LOG_ERR, "Cannot delete from sqlite: %s\n", e.what());
-            break;
-        }
+        syslog(LOG_USER | LOG_ERR, "Unknown error: %s\n", e.what());
     }
 }
 

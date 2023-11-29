@@ -6,6 +6,10 @@
 
 class sqlite_storage
 {
+public:
+    struct runtime_error;
+
+private:
     struct deleter
     {
         void operator()(sqlite3 * db) const;
@@ -34,6 +38,11 @@ public:
 
 private:
     sqlite3_ptr db_{ };
+};
+
+struct sqlite_storage::runtime_error : std::runtime_error
+{
+    using std::runtime_error::runtime_error;
 };
 
 inline void sqlite_storage::deleter::operator()(sqlite3 * db) const
